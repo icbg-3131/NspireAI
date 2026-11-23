@@ -27,6 +27,7 @@ jobs:
       - name: Install build-runner tools
         run: brew install autoconf automake libtool
       - name: Build and smoke-test the unpacked ARM64 bundle
+        shell: bash
         run: |
           if ! PYTHON_BIN=python scripts/build-macos-echo.sh 2>&1 | tee "$RUNNER_TEMP/nspire-build.log"; then
             detail="$(tail -25 "$RUNNER_TEMP/nspire-build.log")"

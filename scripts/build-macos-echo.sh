@@ -47,8 +47,14 @@ LAUNCH
 chmod +x "$BUNDLE/Start NspireAI Echo.command"
 cp LICENSE "$BUNDLE/LICENSE.txt"
 cp "$WORK/libusb/COPYING" "$BUNDLE/libusb-LICENSE.txt"
-"$PY" -c 'import pathlib, sysconfig; print(pathlib.Path(sysconfig.get_path("stdlib")) / "LICENSE.txt")' |
-  while IFS= read -r path; do cp "$path" "$BUNDLE/Python-LICENSE.txt"; done
+PYTHON_LICENSE="$("$PY" -c 'import pathlib, sysconfig; print(pathlib.Path(sysconfig.get_path("stdlib")) / "LICENSE.txt")')"
+if [[ -f "$PYTHON_LICENSE" ]]; then
+  cp "$PYTHON_LICENSE" "$BUNDLE/Python-LICENSE.txt"
+else
+  PYTHON_VERSION="$("$PY" -c 'import platform; print(platform.python_version())')"
+  curl -fsSL "https://raw.githubusercontent.com/python/cpython/v$PYTHON_VERSION/LICENSE" \
+    -o "$BUNDLE/Python-LICENSE.txt"
+fi
 git -C "$WORK/libusb" archive --prefix=libusb-1.0.29/ --format=tar.gz HEAD > "$BUNDLE/libusb-1.0.29-source.tar.gz"
 SOURCE_ROOT="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-icbg-3131/NspireAI}"
 printf 'NspireAI source and build instructions\n%s/tree/%s\n' \
