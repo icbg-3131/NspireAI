@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+trap 'printf "Build failed at line %s: %s\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
 cd "$(dirname "$0")/.."
 if [[ "$(uname -s):$(uname -m)" != Darwin:arm64 ]]; then
   echo "Build this package on an ARM64 macOS runner." >&2
