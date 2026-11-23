@@ -32,6 +32,11 @@ if [[ -f "$NSPIREAI_ENV" ]]; then
   load_env_file "$NSPIREAI_ENV"
 fi
 BACKEND="${1:-${NSPIRE_AI_BACKEND:-echo}}"
+TRANSPORT="${NSPIRE_NAVNET_TRANSPORT:-java}"
+if [[ "$TRANSPORT" == "native" ]]; then
+  export NSPIREAI_NO_TAKEOVER=1
+  NSPIRE_USB_WAIT_SECONDS="${NSPIRE_USB_WAIT_SECONDS:-15}"
+fi
 PYTHON_BIN="${PYTHON_BIN:-$ROOT/bridge/.venv/bin/python}"
 CUSTOM_USB_HELPER="${NSPIRE_USB_HELPER:-}"
 HELPER_BIN="${CUSTOM_USB_HELPER:-$ROOT/bridge/nspire-helper/target/debug/nspireai-usb-helper}"
@@ -123,9 +128,8 @@ if [[ "$BACKEND" == "openai" && -z "${OPENAI_API_KEY:-}" ]]; then
 fi
 
 cd "$ROOT"
-TRANSPORT="${NSPIRE_NAVNET_TRANSPORT:-java}"
-if [[ "$TRANSPORT" != "java" && "$TRANSPORT" != "raw" ]]; then
-  echo "NSPIRE_NAVNET_TRANSPORT must be java or raw" >&2
+if [[ "$TRANSPORT" != "java" && "$TRANSPORT" != "raw" && "$TRANSPORT" != "native" ]]; then
+  echo "NSPIRE_NAVNET_TRANSPORT must be java, raw, or native" >&2
   exit 2
 fi
 if [[ "$TRANSPORT" == "java" ]]; then
@@ -138,6 +142,11 @@ if [[ "$TRANSPORT" == "java" ]]; then
   if [[ "$NSPIRE_CLIENT_SERVICE_ID" != "0" ]]; then
     export NSPIRE_NAVNET_INITIAL_READ_DELAY_MS="${NSPIRE_NAVNET_INITIAL_READ_DELAY_MS:-0}"
   fi
+elif [[ "$TRANSPORT" == "native" ]]; then
+  HELPER_BIN="$ROOT/scripts/run-nspire-native-helper.sh"
+  export NSPIRE_USB_HELPER="$HELPER_BIN"
+  export NSPIRE_NATIVE_PYTHON="$PYTHON_BIN"
+  export NSPIRE_SERVICE_ID=0x5001
 else
   export NSPIRE_USB_HELPER="$HELPER_BIN"
 fi
@@ -164,7 +173,7 @@ if [[ "$TRANSPORT" == "raw" && -z "$CUSTOM_USB_HELPER" ]]; then
   HELPER_BIN="$RAW_TARGET_DIR/debug/nspireai-usb-helper"
   export NSPIRE_USB_HELPER="$HELPER_BIN"
 fi
-if [[ "$TRANSPORT" != "java" && ! -x "$HELPER_BIN" ]]; then
+if [[ "$TRANSPORT" == "raw" && ! -x "$HELPER_BIN" ]]; then
   echo "USB helper is missing; run: cargo build --manifest-path bridge/nspire-helper/Cargo.toml" >&2
   exit 2
 fi

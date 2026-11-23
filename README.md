@@ -61,6 +61,11 @@ The implementation has been developed and exercised against a **CX II CAS runnin
 
 ## Running it
 
+For the standalone Ndless build on Apple Silicon, see the
+[native USB echo setup](docs/native-usb.md) for a free, experimental host path.
+The [standalone macOS package](docs/macos-echo-package.md) bundles the host
+dependencies.
+
 The commands below describe the intended development route. A successful build, upload, `READY`, or USB descriptor does not prove a working page-open transport. Check [`docs/test-status.md`](docs/test-status.md) before treating a physical run as complete.
 
 You need a Mac or Linux machine, Java, Python 3 and a CX II with

@@ -47,13 +47,14 @@ MAX_RESPONSE_BYTES = 16384
 
 
 class NavNetBridge:
-    def __init__(self, helper: str, backend_name: str, model: str, base_url: Optional[str], timeout: float):
+    def __init__(self, helper: str | list[str], backend_name: str, model: str, base_url: Optional[str], timeout: float):
         # Backend configuration can fail (for example, a missing OpenAI key).
         # Do that before opening the USB helper so a startup error cannot leave
         # a Java process holding the calculator interface.
         self.backend = make_backend(backend_name, model, os.environ.get("OPENAI_API_KEY"), base_url, timeout)
+        helper_command = [helper] if isinstance(helper, str) else helper
         self.process = subprocess.Popen(
-            [helper, "--stdio"],
+            [*helper_command, "--stdio"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,

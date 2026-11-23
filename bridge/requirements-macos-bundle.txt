@@ -1,0 +1,2 @@
+-r requirements-native-usb.txt
+pyinstaller==6.19.0
