@@ -6,10 +6,10 @@ calculator executable. Keep your installed `nspire_ai.tns`.
 
 ## Download and start
 
-1. Download `NspireAI-Echo-macos-arm64.zip` from the matching GitHub
-   **Release**. For test builds, sign in to GitHub, open the matching
-   **macOS ARM64 echo bundle** Actions run, and download the artifact
-   of the same name. GitHub wraps the ZIP and checksum in an outer ZIP.
+1. Download `NspireAI-Echo-macos-arm64.zip` by signing in to GitHub and opening the successful
+   **macOS ARM64 echo bundle** Actions run. Download the
+   **NspireAI-Echo-macos-arm64** artifact under **Artifacts**. GitHub wraps
+   the ZIP and checksum in an outer ZIP.
 2. Extract the application ZIP. Keep the entire `NspireAI-Echo` folder
    together. No developer tools or package manager are needed on the Mac.
 3. Close N-Link and other USB clients, connect the calculator, and leave
@@ -38,14 +38,13 @@ shasum -a 256 -c NspireAI-Echo-macos-arm64.zip.sha256
 
 ## Build and publication
 
-The workflow uses GitHub's standard public `macos-15` ARM64 runner. It skips
-private repositories. The build runs the packet simulation, builds the
-pinned libusb source and a PyInstaller console bundle, verifies the Mach-O
-architecture and signatures, and runs the helper from the extracted ZIP
-with a system-only PATH. That self-test checks the runtime and libusb
-loading. A real calculator is required to test physical USB echo.
+The workflow uses GitHub's standard public `macos-26` ARM64 runner and
+skips private repositories. The build job tests the packet simulation
+and creates a ZIP containing a PyInstaller console executable and pinned
+libusb. A separate macOS job checks the extracted package's architecture,
+signatures, permissions, and dynamic library paths. It starts both the
+bundle self-test and normal launcher with a fresh home and system-only
+PATH before uploading the 30-day download and SHA-256 checksum.
 
-The packaging branch automatically produces a 14-day GitHub Actions
-artifact. A maintainer can push a `native-echo-v*` tag on a verified build
-commit to publish the ZIP and its SHA-256 checksum as GitHub Release assets.
-Release downloads remain available until the maintainer removes them.
+The packaged startup checks the expected no-device path on the runner.
+A real calculator is required to test physical USB echo.

@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 trap 'printf "Build failed at line %s: %s\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
+stage() { printf '\n== %s ==\n' "$*"; }
 cd "$(dirname "$0")/.."
 if [[ "$(uname -s):$(uname -m)" != Darwin:arm64 ]]; then
   echo "Build this package on an ARM64 macOS runner." >&2
   exit 2
 fi
 
+stage "Runner identity and tools"
+uname -sm
+sw_vers
+xcode-select -p
+clang --version
+autoreconf --version
 ROOT="$PWD"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/nspireai-macos.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 PYTHON_BIN="${PYTHON_BIN:-python3.12}"
+stage "Install pinned Python packaging dependencies"
 "$PYTHON_BIN" -m venv "$WORK/venv"
 PY="$WORK/venv/bin/python"
 "$PY" -c 'import platform; assert platform.machine() == "arm64"'
 "$PY" -m pip install -r bridge/requirements-macos-bundle.txt
+"$PY" -m pip freeze
 export MACOSX_DEPLOYMENT_TARGET=11.0
 
+stage "Build pinned libusb for macOS ARM64"
 git clone --quiet --depth 1 --branch v1.0.29 https://github.com/libusb/libusb.git "$WORK/libusb"
 test "$(git -C "$WORK/libusb" rev-parse HEAD)" = 15a7ebb4d426c5ce196684347d2b7cafad862626
 (
@@ -27,6 +37,10 @@ test "$(git -C "$WORK/libusb" rev-parse HEAD)" = 15a7ebb4d426c5ce196684347d2b7ca
 )
 
 LIBUSB="$WORK/usb-prefix/lib/libusb-1.0.0.dylib"
+ls -l "$WORK/usb-prefix/lib"
+file "$LIBUSB"
+lipo -verify_arch arm64 "$LIBUSB"
+stage "Freeze Python entry point and PyUSB with PyInstaller"
 "$PY" -m PyInstaller --noconfirm --clean --console --onedir --target-arch arm64 \
   --name NspireAI-Echo --paths "$ROOT" --distpath "$WORK/package" \
   --workpath "$WORK/pyinstaller" --specpath "$WORK" \
@@ -34,6 +48,7 @@ LIBUSB="$WORK/usb-prefix/lib/libusb-1.0.0.dylib"
   --copy-metadata pyusb --copy-metadata pyinstaller \
   --add-binary "$LIBUSB:." scripts/frozen-echo.py
 
+stage "Add console launcher, licenses, and source information"
 BUNDLE="$WORK/package/NspireAI-Echo"
 cat > "$BUNDLE/Start NspireAI Echo.command" <<'LAUNCH'
 #!/bin/bash
@@ -61,23 +76,9 @@ printf 'NspireAI source and build instructions\n%s/tree/%s\n' \
   "$SOURCE_ROOT" "$(git rev-parse HEAD)" > "$BUNDLE/Source.txt"
 cp docs/macos-echo-package.md "$BUNDLE/README.md"
 
-# Verify the actual shipping binaries and startup path. In particular, the
-# child helper must load libusb from the unpacked bundle, even with no Homebrew.
-for binary in "$BUNDLE/NspireAI-Echo" "$BUNDLE/_internal/libusb-1.0.0.dylib"; do
-  lipo -verify_arch arm64 "$binary"
-  codesign --verify --strict "$binary"
-done
-otool -L "$BUNDLE/_internal/libusb-1.0.0.dylib"
-if otool -L "$BUNDLE/_internal/libusb-1.0.0.dylib" | tail -n +3 | grep -Eq '/opt/homebrew|/usr/local|nspireai-macos\.'; then
-  echo "Bundled libusb has an external build-machine dependency" >&2
-  exit 1
-fi
-
+stage "Create the candidate ZIP and SHA-256 file"
 mkdir -p "$ROOT/dist"
 ZIP="$ROOT/dist/NspireAI-Echo-macos-arm64.zip"
 ditto -c -k --keepParent "$BUNDLE" "$ZIP"
-mkdir "$WORK/verify"
-ditto -x -k "$ZIP" "$WORK/verify"
-env -i HOME="$HOME" PATH=/usr/bin:/bin \
-  "$WORK/verify/NspireAI-Echo/NspireAI-Echo" --self-test
-(cd "$ROOT/dist" && shasum -a 256 "$(basename "$ZIP")" > "$(basename "$ZIP").sha256")
+(cd "$ROOT/dist" && shasum -a 256 "$(basename "$ZIP")" | tee "$(basename "$ZIP").sha256")
+ls -lh "$ZIP"
