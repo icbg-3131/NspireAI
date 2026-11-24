@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import binascii
 from collections import deque
+from contextlib import contextmanager
+from ctypes import POINTER, Structure, c_char_p, c_int, c_uint16
 from dataclasses import dataclass
 import errno
 import os
@@ -17,6 +19,7 @@ import signal
 import struct
 import sys
 import time
+import traceback
 
 from . import protocol
 
@@ -382,13 +385,49 @@ def load_usb_backend():
     return backend
 
 
+class LibUSBVersion(Structure):
+    _fields_ = [
+        (part, c_uint16) for part in ("major", "minor", "micro", "nano")
+    ] + [("rc", c_char_p), ("description", c_char_p)]
+
+
+def usb_error_detail(error: Exception, backend) -> str:
+    code = getattr(error, "backend_error_code", None)
+    if code is None or backend is None:
+        return str(error)
+    error_name = backend.lib.libusb_error_name
+    error_name.argtypes = [c_int]
+    error_name.restype = c_char_p
+    native_name = error_name(code).decode("ascii", errors="replace")
+    return f"{error}; libusb={native_name} ({code})"
+
+
+@contextmanager
+def usb_operation(label: str, backend=None):
+    print(f"USB BEGIN {label}", flush=True)
+    try:
+        yield
+    except Exception as error:
+        raise LinkError(f"{label}: {usb_error_detail(error, backend)}") from error
+    print(f"USB OK {label}", flush=True)
+
+
 class USBTransport:
     def __init__(self):
         import usb.core
         import usb.util
 
-        backend = load_usb_backend()
-        devices = list(usb.core.find(find_all=True, backend=backend, idVendor=0x0451, idProduct=0xE022))
+        with usb_operation("initialize libusb"):
+            backend = load_usb_backend()
+            get_version = backend.lib.libusb_get_version
+            get_version.argtypes = []
+            get_version.restype = POINTER(LibUSBVersion)
+            version = get_version().contents
+            print(f"USB libusb {version.major}.{version.minor}.{version.micro}.{version.nano}; "
+                  f"LIBUSB_DEBUG={os.environ.get('LIBUSB_DEBUG', 'unset')}; "
+                  f"dylib={os.environ.get('NSPIRE_LIBUSB_PATH', 'system lookup')}", flush=True)
+        with usb_operation("enumerate TI-Nspire CX II 0451:e022", backend):
+            devices = list(usb.core.find(find_all=True, backend=backend, idVendor=0x0451, idProduct=0xE022))
         if len(devices) != 1:
             raise LinkError(f"connect exactly one TI-Nspire CX II on USB (found {len(devices)})")
 
@@ -396,27 +435,47 @@ class USBTransport:
         self.device.default_timeout = IO_TIMEOUT_MS
         self.usb_core = usb.core
         self.usb_util = usb.util
+        self.backend = backend
         try:
-            try:
-                configuration = self.device.get_active_configuration()
-            except usb.core.USBError as error:
-                # PyUSB reports this specific error when the device is
-                # unconfigured. Leave an already configured device alone.
-                if error.strerror != "Configuration not set":
-                    raise
-                self.device.set_configuration(1)
-                configuration = self.device.get_active_configuration()
-            interface = configuration[(0, 0)]
-            endpoints = {
-                ep.bEndpointAddress for ep in interface
-                if usb.util.endpoint_type(ep.bmAttributes) == usb.util.ENDPOINT_TYPE_BULK
-            }
-            if not {0x01, 0x81}.issubset(endpoints):
-                raise LinkError("calculator does not expose the expected CX II bulk endpoints")
-            # Do not reset the device or detach another application's driver.
-            usb.util.claim_interface(self.device, interface.bInterfaceNumber)
+            with usb_operation("libusb_open", backend):
+                # PyUSB 1.3.1 opens lazily. Open through its resource manager
+                # now to separate a failure here from configuration lookup.
+                self.device._ctx.managed_open()
+            with usb_operation("read active USB configuration", backend):
+                try:
+                    configuration = self.device.get_active_configuration()
+                except usb.core.USBError as error:
+                    if error.strerror != "Configuration not set":
+                        raise
+                    configuration = None
+                    print("USB no active configuration reported by PyUSB", flush=True)
+            if configuration is None:
+                with usb_operation("libusb_set_configuration(1)", backend):
+                    self.device.set_configuration(1)
+                with usb_operation("read configuration after selection", backend):
+                    configuration = self.device.get_active_configuration()
+            with usb_operation("inspect interface and bulk endpoint descriptors", backend):
+                interface = configuration[(0, 0)]
+                endpoints = {
+                    ep.bEndpointAddress for ep in interface
+                    if usb.util.endpoint_type(ep.bmAttributes) == usb.util.ENDPOINT_TYPE_BULK
+                }
+                print(f"USB configuration={configuration.bConfigurationValue} "
+                      f"interface={interface.bInterfaceNumber} "
+                      f"alternate={interface.bAlternateSetting} "
+                      f"bulk endpoints={sorted(hex(ep) for ep in endpoints)}", flush=True)
+                if not {0x01, 0x81}.issubset(endpoints):
+                    raise LinkError("calculator does not expose the expected CX II bulk endpoints")
+            # Keep the same interface ownership policy. No reset or detach.
+            with usb_operation(f"libusb_claim_interface({interface.bInterfaceNumber})", backend):
+                usb.util.claim_interface(self.device, interface.bInterfaceNumber)
         except BaseException:
-            self.close()
+            try:
+                self.close()
+            except Exception:
+                print("USB cleanup also failed", flush=True)
+                traceback.print_exc(file=sys.stdout)
+                sys.stdout.flush()
             raise
 
     def write(self, packet: Packet):
@@ -424,7 +483,7 @@ class USBTransport:
         try:
             transferred = self.device.write(0x01, wire, timeout=IO_TIMEOUT_MS)
         except self.usb_core.USBError as error:
-            raise LinkError(f"USB write failed: {error}") from error
+            raise LinkError(f"bulk USB write to 0x01: {usb_error_detail(error, self.backend)}") from error
         if transferred != len(wire):
             raise LinkError("short USB write")
 
@@ -436,15 +495,19 @@ class USBTransport:
         except self.usb_core.USBError as error:
             if error.errno == errno.ENODEV:
                 raise LinkError("calculator was disconnected") from error
-            raise LinkError(f"USB read failed: {error}") from error
+            raise LinkError(f"bulk USB read from 0x81: {usb_error_detail(error, self.backend)}") from error
 
     def close(self):
-        self.usb_util.dispose_resources(self.device)
+        with usb_operation("release claimed interface and close USB handle", self.backend):
+            self.usb_util.dispose_resources(self.device)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stdio", action="store_true", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--stdio", action="store_true")
+    mode.add_argument("--probe-usb", action="store_true",
+                      help="open and claim USB, then close without starting the echo session")
     parser.add_argument("--startup-timeout", type=int, default=45)
     args = parser.parse_args()
     if not 1 <= args.startup_timeout <= 120:
@@ -461,13 +524,18 @@ def main() -> int:
     try:
         transport = USBTransport()
         try:
-            print("USB CLAIMED; waiting for the CX II link handshake", flush=True)
-            run_session(transport, sys.stdin.fileno(), lambda line: print(line, flush=True),
-                        lambda: stopping, args.startup_timeout)
+            if args.probe_usb:
+                print("USB PROBE PASS: device opened and interface claimed", flush=True)
+            else:
+                print("USB CLAIMED; waiting for the CX II link handshake", flush=True)
+                run_session(transport, sys.stdin.fileno(), lambda line: print(line, flush=True),
+                            lambda: stopping, args.startup_timeout)
         finally:
             transport.close()
-    except (LinkError, OSError, ImportError) as error:
+    except Exception as error:
         print(f"ERROR {error}", flush=True)
+        traceback.print_exc(file=sys.stdout)
+        sys.stdout.flush()
         return 1
     print("STOPPED native USB helper released the calculator", flush=True)
     return 0

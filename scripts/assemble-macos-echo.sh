@@ -79,6 +79,7 @@ library="$root/lib/libusb-1.0.0.dylib"
 }
 exec /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin \
   PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 PYTHONIOENCODING=utf-8 \
+  LIBUSB_DEBUG="${LIBUSB_DEBUG:-4}" \
   NSPIRE_LIBUSB_PATH="$library" \
   /usr/bin/arch -arm64 "$python" "$root/app/run_echo.py" "$@"
 LAUNCH

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NspireAI USB probe</title>
+<style>
+  body { margin: 3rem auto; max-width: 44rem; padding: 0 1rem; font: 1rem/1.5 system-ui; color: #172835; background: #f7fafb; }
+  button { padding: .55rem 1rem; font: inherit; color: white; background: #145963; border: 0; border-radius: .3rem; }
+  button:disabled { opacity: .6; }
+  pre { padding: 1rem; background: #ebf1f3; white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+<h1>NspireAI USB probe</h1>
+<p>Close other calculator USB clients. Connect the calculator and leave it at My Documents. This probe opens and claims the interface, then releases it without sending chat or file data.</p>
+<button id="probe">Choose calculator and test USB</button>
+<pre id="output" role="log" aria-live="polite">Ready.</pre>
+<script>
+  const button = document.getElementById('probe');
+  const output = document.getElementById('output');
+  const report = (text) => { output.textContent += text + '\n'; };
+
+  button.addEventListener('click', async () => {
+    output.textContent = '';
+    if (!navigator.usb) {
+      report('WebUSB is unavailable. Open this loopback URL in Chrome or another browser with WebUSB enabled.');
+      return;
+    }
+    button.disabled = true;
+    let calculator;
+    let claimed = false;
+    let stage = 'requestDevice';
+    try {
+      calculator = await navigator.usb.requestDevice({
+        filters: [{vendorId: 0x0451, productId: 0xe022}],
+      });
+      report('Selected TI-Nspire CX II (0451:e022)');
+      stage = 'open';
+      await calculator.open();
+      report('PASS open');
+      if (!calculator.configuration) {
+        stage = 'selectConfiguration(1)';
+        await calculator.selectConfiguration(1);
+        report('PASS selectConfiguration(1)');
+      }
+      report('Active configuration ' + calculator.configuration.configurationValue);
+      stage = 'claimInterface(0)';
+      await calculator.claimInterface(0);
+      claimed = true;
+      report('PASS claimInterface(0)');
+      stage = 'inspect bulk endpoints';
+      const endpoints = calculator.configuration.interfaces
+        .find(({interfaceNumber}) => interfaceNumber === 0).alternate.endpoints;
+      const hasBulk = (direction) => endpoints.some(
+        (ep) => ep.type === 'bulk' && ep.direction === direction && ep.endpointNumber === 1);
+      if (!hasBulk('in') || !hasBulk('out')) throw new Error('Expected bulk endpoints 0x81 and 0x01');
+      report('PASS bulk endpoints 0x81 and 0x01 available');
+    } catch (error) {
+      report('FAIL ' + stage + ' — ' + error.name + ': ' + error.message);
+    } finally {
+      if (calculator?.opened) {
+        if (claimed) {
+          try { await calculator.releaseInterface(0); report('Released interface 0'); }
+          catch (error) { report('Release error — ' + error.name + ': ' + error.message); }
+        }
+        try { await calculator.close(); report('Closed device'); }
+        catch (error) { report('Close error — ' + error.name + ': ' + error.message); }
+      }
+      button.disabled = false;
+    }
+  });
+</script>
